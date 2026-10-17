@@ -37,21 +37,45 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y make bison python3 curl unzip
 
+      # The build container runs as root; the checkout is owned by the runner
+      # user, so git inside the container refuses the vendored repos
+      # ("dubious ownership").  Build as root, then return the tree.
       - name: Build
+        shell: bash
         run: |
-          sh build.sh --jobs 4 2>&1 | tee build.log
+          set -o pipefail
+          sudo chown -R root:root .
+          sudo git config --global --add safe.directory '*'
+          sudo sh build.sh --jobs 4 2>&1 | tee build.log
+
+      - name: Hand the tree back to the runner user
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" .
+          ls -la horizon-wine | head -30 || true
 
       - name: Tail of the log on failure
         if: failure()
         run: tail -n 120 build.log || true
 
-      - name: Extract the runtime
+      - name: Find and extract the runtime
+        if: success()
         run: |
+          echo "=== all zips ==="
+          find . -name '*.zip' -not -path './.git/*' | head -50
+          echo "=== build-autorun ==="
+          ls -la horizon-wine/build-autorun 2>/dev/null || echo "(missing)"
+          echo "=== build dirs ==="
+          ls -d horizon-wine/build-* 2>/dev/null || true
           mkdir -p out
-          unzip -o horizon-wine/build-autorun/autorun-*.zip 'switch/wine/wine-nx-runtime.nro' -d out
+          ZIP=$(find . -name 'autorun-*.zip' -not -path './.git/*' | head -1)
+          if [ -z "$ZIP" ]; then echo "::error::build produced no autorun zip"; exit 1; fi
+          echo "using $ZIP"
+          unzip -o "$ZIP" 'switch/wine/wine-nx-runtime.nro' -d out
           ls -l out/switch/wine/
 
       - name: Upload runtime
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: wine-nx-runtime-nro
