@@ -11317,6 +11317,19 @@ static int horizon_server_handle_create_file( struct horizon_server_connection *
              * open (FS result 0xe02, EIO in libnx), where Windows might share. */
             else if (open_errno == EIO && fsdevGetLastResult() == 0xe02)
                 reply.header.error = HORIZON_STATUS_SHARING_VIOLATION;
+            /* Some cards answer the same refusal with EINVAL. A program that
+             * opens its own data file read/write only ever reads it, so open
+             * it read-only instead of failing the whole open. */
+            else if (open_errno == EINVAL && !(flags & (O_CREAT | O_TRUNC)) &&
+                     (fd = open( filename, O_RDONLY, 0666 )) != -1)
+            {
+                if (!(stored_name = strdup( filename )))
+                {
+                    close( fd );
+                    fd = -1;
+                    reply.header.error = HORIZON_STATUS_NO_MEMORY;
+                }
+            }
             else reply.header.error = horizon_server_errno_status( open_errno );
         }
         else if (!(stored_name = strdup( filename ))) reply.header.error = HORIZON_STATUS_NO_MEMORY;
