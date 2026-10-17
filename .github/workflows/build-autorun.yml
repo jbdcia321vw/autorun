@@ -25,10 +25,13 @@ jobs:
 
       - name: Fail fast if the patch is missing
         run: |
-          if grep -q "open_errno == EINVAL" dlls/ntdll/unix/horizon.c; then
-            echo "patch present"
+          if grep -q "second open shares an existing descriptor" dlls/ntdll/unix/horizon.c; then
+            echo "dup patch present (shared descriptor)"
+          elif grep -q "open_errno == EINVAL" dlls/ntdll/unix/horizon.c; then
+            echo "read-only retry present"
           else
-            echo "::error::horizon.c does not contain the EINVAL read-only retry"
+            echo "::error::horizon.c has no autorun patch (neither dup nor read-only retry)"
+            grep -n "fd = open( filename, flags, 0666 );" dlls/ntdll/unix/horizon.c || true
             exit 1
           fi
 
