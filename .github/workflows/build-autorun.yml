@@ -37,9 +37,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y make bison python3 curl unzip
 
+      # package-autorun.py hardcodes the author's macOS llvm-mingw directory;
+      # point that name at the Linux toolchain build.sh downloads.
+      - name: Alias the llvm-mingw toolchain name
+        run: |
+          mkdir -p horizon-wine/toolchains
+          cd horizon-wine/toolchains
+          ln -sfn llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64 \
+                  llvm-mingw-20260505-ucrt-macos-universal
+          ls -la
+
       # The build container runs as root; the checkout is owned by the runner
-      # user, so git inside the container refuses the vendored repos
-      # ("dubious ownership").  Build as root, then return the tree.
+      # user, so git inside the container refuses the vendored repos.
       - name: Build
         shell: bash
         run: |
@@ -50,43 +59,52 @@ jobs:
 
       - name: Hand the tree back to the runner user
         if: always()
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" .
-          ls -la horizon-wine | head -30 || true
+        run: sudo chown -R "$(id -u):$(id -g)" .
 
       - name: Tail of the log on failure
         if: failure()
-        run: tail -n 120 build.log || true
+        run: tail -n 150 build.log || true
 
       - name: Find and extract the runtime
-        if: success()
+        if: always()
+        shell: bash
         run: |
-          echo "=== all zips ==="
-          find . -name '*.zip' -not -path './.git/*' | head -50
-          echo "=== build-autorun ==="
-          ls -la horizon-wine/build-autorun 2>/dev/null || echo "(missing)"
-          echo "=== build dirs ==="
-          ls -d horizon-wine/build-* 2>/dev/null || true
+          set -e
           mkdir -p out
-          ZIP=$(find . -name 'autorun-*.zip' -not -path './.git/*' | head -1)
-          if [ -z "$ZIP" ]; then echo "::error::build produced no autorun zip"; exit 1; fi
+          ZIP=$(ls -t horizon-wine/build-autorun/autorun-*.zip 2>/dev/null | head -1 || true)
+          if [ -z "$ZIP" ]; then
+            ZIP=$(ls -t horizon-wine/build-switch-amd64/*.zip 2>/dev/null | head -1 || true)
+            echo "packaging did not finish; using the raw runtime zip"
+          fi
+          if [ -z "$ZIP" ]; then
+            echo "::error::no zip produced"
+            ls -la horizon-wine | head -40
+            exit 1
+          fi
           echo "using $ZIP"
-          unzip -o "$ZIP" 'switch/wine/wine-nx-runtime.nro' -d out
-          ls -l out/switch/wine/
+          unzip -q -o "$ZIP" -d out
+          NRO=$(find out -name 'wine-nx-runtime.nro' | head -1)
+          if [ -z "$NRO" ]; then
+            echo "::error::wine-nx-runtime.nro not found inside $ZIP"
+            find out -maxdepth 3 | head -60
+            exit 1
+          fi
+          echo "found: $NRO"
+          mkdir -p runtime
+          cp "$NRO" runtime/wine-nx-runtime.nro
+          ls -l runtime/
 
       - name: Upload runtime
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: wine-nx-runtime-nro
-          path: out/switch/wine/wine-nx-runtime.nro
+          path: runtime/wine-nx-runtime.nro
+          if-no-files-found: error
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: |
-            build.log
-            horizon-wine/build-autorun/*.zip
+          path: build.log
           if-no-files-found: warn
