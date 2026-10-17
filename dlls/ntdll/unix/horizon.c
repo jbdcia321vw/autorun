@@ -11296,6 +11296,37 @@ static int horizon_server_handle_create_file( struct horizon_server_connection *
     if (!reply.header.error && !is_dir)
     {
         fd = open( filename, flags, 0666 );
+                /* The SD card refuses a second open of a file that is already open
+         * (EIO from libnx, FS result 0xe02) and refuses every further open
+         * once one of the handles is a writer, where Windows lets a program
+         * open the same file as often as it likes. The extra handle shares
+         * the descriptor the first open got, as the mapping code already does
+         * for duplicated descriptors. */
+        if (fd == -1 && !(flags & (O_CREAT | O_TRUNC)))
+        {
+            const struct horizon_server_handle_entry *other;
+            int any_fd = -1, write_fd = -1;
+
+            pthread_mutex_lock( &horizon_server_objects_mutex );
+            for (other = horizon_server_handles; other; other = other->next)
+            {
+                const struct horizon_server_object *object = other->object;
+                if (object->type != HORIZON_SERVER_OBJECT_FILE || object->file_fd == -1 ||
+                    !object->file_name || !horizon_unix_path_equal( object->file_name, filename ))
+                    continue;
+                if (any_fd == -1) any_fd = object->file_fd;
+                if (object->file_access & 0x00000002) { write_fd = object->file_fd; break; }
+            }
+            if ((flags & 3) != 0 && write_fd != -1) any_fd = write_fd;
+            if (any_fd != -1) fd = dup( any_fd );
+            pthread_mutex_unlock( &horizon_server_objects_mutex );
+            if (fd != -1)
+            {
+                char note[256];
+                snprintf( note, sizeof(note), "[FS] second open shares an existing descriptor: %s", filename );
+                wine_nx_runtime_trace( note );
+            }
+        }
         if (fd == -1)
         {
             int open_errno = errno;
@@ -11317,28 +11348,6 @@ static int horizon_server_handle_create_file( struct horizon_server_connection *
              * open (FS result 0xe02, EIO in libnx), where Windows might share. */
             else if (open_errno == EIO && fsdevGetLastResult() == 0xe02)
                 reply.header.error = HORIZON_STATUS_SHARING_VIOLATION;
-
-            /* The card can also answer EIO or EINVAL for the same refusal.
-             * A program that opens its own data file read/write only ever
-             * reads it, so retry such an open read-only. */
-            else if ((open_errno == EIO || open_errno == EINVAL) && !(flags & (O_CREAT | O_TRUNC)))
-            {
-                char note[256];
-                int retry_error;
-
-                fd = open( filename, O_RDONLY, 0666 );
-                retry_error = fd == -1 ? errno : 0;
-                snprintf( note, sizeof(note), "[FS] read-only retry: fd=%d errno=%d", fd, retry_error );
-                wine_nx_runtime_trace( note );
-                if (fd == -1)
-                    reply.header.error = horizon_server_errno_status( retry_error );
-                else if (!(stored_name = strdup( filename )))
-                {
-                    close( fd );
-                    fd = -1;
-                    reply.header.error = HORIZON_STATUS_NO_MEMORY;
-                }
-            }
             else reply.header.error = horizon_server_errno_status( open_errno );
         }
         else if (!(stored_name = strdup( filename ))) reply.header.error = HORIZON_STATUS_NO_MEMORY;
