@@ -1936,6 +1936,16 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
             if ((access & FILE_UNIX_WRITE_ACCESS) || (flags & O_CREAT))
                 fd->unix_fd = open( name, O_RDONLY | (flags & ~(O_TRUNC | O_CREAT | O_EXCL)), *mode );
         }
+        #ifdef __SWITCH__
+        /* The sdmc backend can refuse a read/write open of a file that is
+         * already open (EINVAL). Programs that open their own data files
+         * read/write only ever read them, so fall back to read-only instead
+         * of failing the whole open. */
+        else if (errno == EINVAL && rw_mode != O_RDONLY && !(flags & O_CREAT))
+        {
+            fd->unix_fd = open( name, O_RDONLY | (flags & ~(O_TRUNC | O_CREAT | O_EXCL)), *mode );
+        }
+        #endif
 
         if (fd->unix_fd == -1)
         {
