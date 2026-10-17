@@ -1,0 +1,68 @@
+name: build-autorun
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore: [ '**.md' ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Fail fast if the patch is missing
+        run: |
+          if grep -q "rw_mode != O_RDONLY" server/fd.c; then
+            echo "patch present"
+          else
+            echo "::error::server/fd.c does not contain the read-only fallback patch"
+            exit 1
+          fi
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make bison python3 curl unzip
+
+      - name: Build
+        run: |
+          sh build.sh --jobs 4 2>&1 | tee build.log
+
+      - name: Tail of the log on failure
+        if: failure()
+        run: tail -n 120 build.log || true
+
+      - name: Extract the runtime
+        run: |
+          mkdir -p out
+          unzip -o horizon-wine/build-autorun/autorun-*.zip 'switch/wine/wine-nx-runtime.nro' -d out
+          ls -l out/switch/wine/
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-nx-runtime-nro
+          path: out/switch/wine/wine-nx-runtime.nro
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build.log
+            horizon-wine/build-autorun/*.zip
+          if-no-files-found: warn
