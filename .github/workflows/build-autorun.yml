@@ -25,10 +25,10 @@ jobs:
 
       - name: Fail fast if the patch is missing
         run: |
-          if grep -q "rw_mode != O_RDONLY" server/fd.c; then
+          if grep -q "open_errno == EINVAL" dlls/ntdll/unix/horizon.c; then
             echo "patch present"
           else
-            echo "::error::server/fd.c does not contain the read-only fallback patch"
+            echo "::error::horizon.c does not contain the EINVAL read-only retry"
             exit 1
           fi
 
@@ -45,19 +45,20 @@ jobs:
           ln -sfn llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64 \
                   llvm-mingw-20260505-ucrt-macos-universal
 
-      # The build container runs as root; the checkout is owned by the runner
-      # user, so git inside the container refuses the vendored repos.
+      # The build container runs as root, so the tree must be root-owned while
+      # it runs; tee therefore runs as root too, and the tree is handed back to
+      # the runner user afterwards whatever happens.
       - name: Build
         shell: bash
         run: |
           set -o pipefail
           sudo chown -R root:root .
           sudo git config --global --add safe.directory '*'
-          sudo sh build.sh --jobs 4 2>&1 | tee build.log
-
-      - name: Hand the tree back to the runner user
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" . || true
+          rc=0
+          sudo sh build.sh --jobs 4 2>&1 | sudo tee build.log > /dev/null || rc=$?
+          sudo chown -R "$(id -u):$(id -g)" .
+          echo "build.sh exit code: $rc"
+          exit $rc
 
       - name: Show what was produced
         if: always()
@@ -67,17 +68,22 @@ jobs:
           echo "--- build-switch-amd64 ---"
           ls -l horizon-wine/build-switch-amd64/*.zip 2>/dev/null || echo "(none)"
           echo "--- log tail ---"
-          tail -n 40 build.log 2>/dev/null || echo "(no build.log)"
+          tail -n 60 build.log 2>/dev/null || echo "(no build.log)"
 
-      # Upload the archives as they are; no extraction step to fail.
+      - name: Stage the package
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/art"
+          cp -v horizon-wine/build-autorun/*.zip "$RUNNER_TEMP/art/" 2>/dev/null || true
+          cp -v horizon-wine/build-switch-amd64/*.zip "$RUNNER_TEMP/art/" 2>/dev/null || true
+          ls -l "$RUNNER_TEMP/art"
+
       - name: Upload package
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: autorun-package
-          path: |
-            horizon-wine/build-autorun/*.zip
-            horizon-wine/build-switch-amd64/*.zip
+          path: ${{ runner.temp }}/art/*.zip
           if-no-files-found: warn
 
       - name: Upload log
