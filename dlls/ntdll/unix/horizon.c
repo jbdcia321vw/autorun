@@ -11313,17 +11313,26 @@ static int horizon_server_handle_create_file( struct horizon_server_connection *
                     if (!(stored_name = strdup( filename ))) reply.header.error = HORIZON_STATUS_NO_MEMORY;
                 }
             }
-            /* The SD card refuses to open a file for writing while it is
+                        /* The SD card refuses to open a file for writing while it is
              * open (FS result 0xe02, EIO in libnx), where Windows might share. */
             else if (open_errno == EIO && fsdevGetLastResult() == 0xe02)
                 reply.header.error = HORIZON_STATUS_SHARING_VIOLATION;
-            /* Some cards answer the same refusal with EINVAL. A program that
-             * opens its own data file read/write only ever reads it, so open
-             * it read-only instead of failing the whole open. */
-            else if (open_errno == EINVAL && !(flags & (O_CREAT | O_TRUNC)) &&
-                     (fd = open( filename, O_RDONLY, 0666 )) != -1)
+
+            /* The card can also answer EIO or EINVAL for the same refusal.
+             * A program that opens its own data file read/write only ever
+             * reads it, so retry such an open read-only. */
+            else if ((open_errno == EIO || open_errno == EINVAL) && !(flags & (O_CREAT | O_TRUNC)))
             {
-                if (!(stored_name = strdup( filename )))
+                char note[256];
+                int retry_error;
+
+                fd = open( filename, O_RDONLY, 0666 );
+                retry_error = fd == -1 ? errno : 0;
+                snprintf( note, sizeof(note), "[FS] read-only retry: fd=%d errno=%d", fd, retry_error );
+                wine_nx_runtime_trace( note );
+                if (fd == -1)
+                    reply.header.error = horizon_server_errno_status( retry_error );
+                else if (!(stored_name = strdup( filename )))
                 {
                     close( fd );
                     fd = -1;
