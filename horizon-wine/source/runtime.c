@@ -3803,7 +3803,12 @@ int main( int argc, char **argv )
     int low_window_available;
     USHORT target_machine;
     int sd_cache = wine_nx_sd_cache_install();  /* before any file on the card is opened */
-
+    /* Mesa keeps its compiled shaders in $HOME/.cache/mesa_shader_cache and
+     * this runtime has no $HOME, so the directory is named here: the shaders
+     * then survive the run instead of being compiled again on the next one. */
+    mkdir( WINE_USER_DIR "/AppData/Local/mesa-shader-cache", 0777 );
+    setenv( "MESA_SHADER_CACHE_DIR", WINE_USER_DIR "/AppData/Local/mesa-shader-cache", 1 );
+    setenv( "MESA_SHADER_CACHE_MAX_SIZE", "256M", 1 );
 #ifdef WINE_NX_SWAP_POC
     if (wine_nx_fex_exception_attach()) return 1;
 #endif
