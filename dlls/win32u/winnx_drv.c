@@ -787,6 +787,8 @@ BOOL wine_nx_drv_ProcessEvents( DWORD mask )
     unsigned int key_count, key_after;
     int wheel, hwheel;
     static unsigned int last_buttons;
+    static int motion_dx, motion_dy;
+    static DWORD motion_sent;
     unsigned int buttons, pressed, released;
     DWORD first, second;
     BOOL moved, keys, placed, stepped;
@@ -817,7 +819,30 @@ BOOL wine_nx_drv_ProcessEvents( DWORD mask )
     for (unsigned int i = 0; i < key_after; i++) wine_nx_send_key( key_events + i );
     wine_nx_pointer_flags( last_buttons, buttons, pressed, released, &first, &second );
     if (placed || first) wine_nx_send_mouse( x, y, (placed ? MOUSEEVENTF_MOVE : 0) | first );
-    if (stepped) wine_nx_send_mouse_motion( dx, dy );
+    /* A program pumps messages far more often than it draws a frame, and each
+     * pump while the stick was off centre sent a move of its own: the queue
+     * filled with more WM_MOUSEMOVE than the program could take, and the
+     * picture crawled for seconds after the stick was let go. The movement is
+     * gathered here and sent at most once every 16 ms, whole. */
+    if (stepped)
+    {
+        DWORD now = NtGetTickCount();
+
+        motion_dx += dx;
+        motion_dy += dy;
+        if (now - motion_sent >= 16)
+        {
+            wine_nx_send_mouse_motion( motion_dx, motion_dy );
+            motion_dx = motion_dy = 0;
+            motion_sent = now;
+        }
+    }
+    else if (motion_dx || motion_dy)
+    {
+        /* The stick was let go: what it moved still has to arrive. */
+        wine_nx_send_mouse_motion( motion_dx, motion_dy );
+        motion_dx = motion_dy = 0;
+    }
     if (second) wine_nx_send_mouse( x, y, second );
     wine_nx_flush_mouse();
     wine_nx_send_extra_mouse( last_buttons, buttons, pressed, released, wheel, hwheel );
