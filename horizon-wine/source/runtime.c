@@ -1985,6 +1985,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     chars += strlen( dos_path ) + 1;
     chars += strlen( nt_path ) + 1;
     chars += sizeof(runtime_environment) + 2 * strlen( graphics_path ) + strlen( dxvk_hud ) - 1;
+    if (!access( RUNTIME_DIR "/gc-dont-collect.txt", F_OK )) chars += sizeof("GC_DONT_GC=1");
     chars += fex_environment_size;
     if (left4dead) chars += sizeof(LEFT4DEAD_ENVIRONMENT) - 1;
     size = sizeof(*params) + chars * sizeof(WCHAR);
@@ -2031,6 +2032,18 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
             value = graphics_path;
         }
         do *cursor++ = (unsigned char)*value; while (*value++);
+    }
+    /* A collector that stops the world by suspending every thread cannot do so
+     * here: Unity's gave up with "fatal error in GC: SuspendThread loop
+     * failed" before MapleStory drew its first frame, and neither translator
+     * made a difference. The marker lets such a program run with the collector
+     * switched off, which costs memory but not time. */
+    if (!access( RUNTIME_DIR "/gc-dont-collect.txt", F_OK ))
+    {
+        static const char gc_off[] = "GC_DONT_GC=1";
+
+        for (i = 0; i < (int)sizeof(gc_off); i++) *cursor++ = (unsigned char)gc_off[i];
+        log_line( "[INIT] the collector collects nothing (gc-dont-collect.txt)" );
     }
     for (i = 0; i < fex_environment_size; i++) *cursor++ = (unsigned char)fex_environment[i];
     if (left4dead)
