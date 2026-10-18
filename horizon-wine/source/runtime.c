@@ -3777,11 +3777,32 @@ static unsigned long long runtime_title_id( void )
     return id;
 }
 
+/* The card lets an application have a number of threads, 96 unless the shell is
+ * asked for more. What the shell answered was not visible, so a program that
+ * ran out of threads had nothing to blame but itself; both the answer and the
+ * limit that is in force are logged now. */
 static void runtime_boost_thread_limit(void)
 {
-    if (appletGetAppletType() != AppletType_Application || R_FAILED(pmshellInitialize())) return;
-    pmshellBoostApplicationThreadResourceLimit();
-    pmshellExit();
+    Result rc = 0;
+    u64 resource = 0;
+    s64 limit = -1;
+
+    if (appletGetAppletType() != AppletType_Application)
+        log_line( "[THREAD] applet: the thread limit is left as the shell set it" );
+    else if (R_FAILED(rc = pmshellInitialize()))
+        log_line( "[THREAD] pmshell unavailable: %#x", rc );
+    else
+    {
+        rc = pmshellBoostApplicationThreadResourceLimit();
+        pmshellExit();
+        if (R_FAILED(rc)) log_line( "[THREAD] the shell refused the thread limit boost: %#x", rc );
+    }
+    if (R_SUCCEEDED(svcGetInfo( &resource, InfoType_ResourceLimit, INVALID_HANDLE, 0 )))
+    {
+        svcGetResourceLimitLimitValue( &limit, resource, LimitableResource_Threads );
+        svcCloseHandle( resource );
+    }
+    log_line( "[THREAD] thread limit %lld", (long long)limit );
 }
 
 int main( int argc, char **argv )
@@ -4442,9 +4463,17 @@ int main( int argc, char **argv )
     }
 
     /* With the image mapped, so no thread-local page can be put where it has
-     * to go, and before the program runs or makes a thread of its own. */
-    if (!low_window_available) hold_thread_local_pages();
-    else log_line( "[TLS] kernel TLS stays above 4 GiB; placeholder threads not needed" );
+     * to go, and before the program runs or makes a thread of its own.
+     * A 64-bit program keeps its image and its reservations above 4 GiB, where
+     * the kernel puts thread-local pages, so none of them can land in its
+     * memory: the placeholders would only spend threads the program needs.
+     * They do cost threads: 90 of the card's 96 were created here, 13 were
+     * kept, and Unity's garbage collector then failed to suspend the program
+     * with "fatal error in GC: SuspendThread loop failed". */
+    if (!low_window_available && main_image_info.Machine != IMAGE_FILE_MACHINE_AMD64)
+        hold_thread_local_pages();
+    else
+        log_line( "[TLS] placeholder threads not needed for this program" );
     {
         params = runtime_create_process_params( target, &main_nt_name, dos_path, sizeof(dos_path) );
         if (!params)
